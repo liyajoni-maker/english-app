@@ -1,284 +1,285 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
-import { Play, Pause, RotateCcw, Bookmark, Volume2, Sparkles, Check, BookOpen } from "lucide-react";
+import React, { useState } from "react";
+import { Play, Pause, Bookmark, Volume2, BookOpen, ChevronRight, Loader2, Library, AlertCircle } from "lucide-react";
 
-const DICTIONARY: Record<string, string> = {
-  journey: "מסע",
-  thousand: "אלף",
-  miles: "מיילים / מרחקים",
-  begins: "מתחיל",
-  single: "בודד, יחיד",
-  step: "צעד",
-  learning: "למידה",
-  language: "שפה",
-  opens: "פותח",
-  doors: "דלתות",
-  whole: "שלם, כולו",
-  new: "חדש",
-  world: "עולם",
-  daily: "יומיומי",
-  practice: "תרגול",
-  curiosity: "סקרנות",
-  courage: "אומץ",
-  confidence: "ביטחון עצמי",
-  grow: "לצמוח, לגדול",
-  fear: "לפחד / פחד",
-  mistakes: "טעויות",
-  opportunities: "הזדמנויות",
-  discover: "לגלות",
-  true: "אמיתי",
-  fluency: "שטף דיבור"
-};
+interface VocabularyItem {
+  word: string;
+  translation: string;
+}
 
-const SAMPLE_STORY = {
-  title: "The Power of Small Steps",
-  level: "Intermediate · B1",
-  text: "The journey of a thousand miles begins with a single step. Learning a new language opens doors to a whole new world. With daily practice, curiosity, and courage, your confidence will grow. Do not fear mistakes; they are just opportunities to discover your true fluency."
-};
+interface ChapterData {
+  title: string;
+  genre: string;
+  chapterNumber: number;
+  content: string;
+  cliffhanger?: string;
+  summaryForNext?: string;
+  vocabulary?: VocabularyItem[];
+}
+
+const GENRES = [
+  { id: "Mystery", label: "תעלומה ומסתורין", icon: "🔍" },
+  { id: "Psychological Thriller", label: "מתח פסיכולוגי", icon: "🧠" },
+  { id: "Adventure & Travel", label: "הרפתקאות ומסעות", icon: "🧭" },
+  { id: "Modern Drama", label: "דרמה עכשווית", icon: "☕" },
+];
 
 export default function Home() {
+  const [selectedGenre, setSelectedGenre] = useState("Mystery");
+  const [chapter, setChapter] = useState<ChapterData | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedWord, setSelectedWord] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentWordIndex, setCurrentWordIndex] = useState<number | null>(null);
-  const [playbackRate, setPlaybackRate] = useState<number>(0.85);
   const [savedWords, setSavedWords] = useState<string[]>([]);
-
-  const words = SAMPLE_STORY.text.split(" ");
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   const cleanWord = (w: string) => w.toLowerCase().replace(/[^a-zA-Z]/g, "");
 
-  // עצירת השמע בעת מעבר דף
-  useEffect(() => {
-    return () => {
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
+  const fetchChapter = async (genreToFetch: string, chapterNum: number, prevSummary: string) => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    setSelectedWord(null);
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      setIsPlaying(false);
+    }
+
+    try {
+      const res = await fetch("/api/story", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          genre: genreToFetch,
+          chapterNumber: chapterNum,
+          previousSummary: prevSummary,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to fetch chapter from AI");
       }
-    };
-  }, []);
+
+      const data: ChapterData = await res.json();
+      
+      // הגנה לוודא שמערך האוצר מילים קיים תמיד
+      data.vocabulary = Array.isArray(data.vocabulary) ? data.vocabulary : [];
+      setChapter(data);
+    } catch (err: any) {
+      console.error("Error generating chapter:", err);
+      setErrorMessage("אירעה שגיאה ביצירת הסיפור. ודאי שמפתח ה-API תקין ומוגדר.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleStartBook = (genreId: string) => {
+    setSelectedGenre(genreId);
+    fetchChapter(genreId, 1, "");
+  };
+
+  const handleNextChapter = () => {
+    if (!chapter) return;
+    fetchChapter(chapter.genre, chapter.chapterNumber + 1, chapter.summaryForNext || "");
+  };
 
   const handleTogglePlay = () => {
-    if (!("speechSynthesis" in window)) {
-      alert("הדפדפן שלך אינו תומך בהקראה קולית");
-      return;
-    }
+    if (!chapter || !("speechSynthesis" in window)) return;
 
     if (isPlaying) {
       window.speechSynthesis.cancel();
       setIsPlaying(false);
-      setCurrentWordIndex(null);
       return;
     }
 
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(SAMPLE_STORY.text);
+    const utterance = new SpeechSynthesisUtterance(chapter.content);
     utterance.lang = "en-US";
-    utterance.rate = playbackRate;
+    utterance.rate = 0.9;
+    utterance.onend = () => setIsPlaying(false);
+    utterance.onerror = () => setIsPlaying(false);
 
-    // זיהוי המילה המוקראת בזמן אמת
-    utterance.onboundary = (event) => {
-      if (event.name === "word") {
-        const charIndex = event.charIndex;
-        // חישוב אינדקס המילה לפי מיקום התו בטקסט
-        const textUpToChar = SAMPLE_STORY.text.substring(0, charIndex);
-        const wordIdx = textUpToChar.trim().split(/\s+/).length - 1;
-        setCurrentWordIndex(Math.max(0, wordIdx));
-      }
-    };
-
-    utterance.onend = () => {
-      setIsPlaying(false);
-      setCurrentWordIndex(null);
-    };
-
-    utterance.onerror = () => {
-      setIsPlaying(false);
-      setCurrentWordIndex(null);
-    };
-
-    utteranceRef.current = utterance;
+    window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
     setIsPlaying(true);
-  };
-
-  const handleResetAudio = () => {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
-    setIsPlaying(false);
-    setCurrentWordIndex(null);
   };
 
   const speakWord = (word: string) => {
     if (!("speechSynthesis" in window)) return;
     const utterance = new SpeechSynthesisUtterance(word);
     utterance.lang = "en-US";
-    utterance.rate = 0.85;
     window.speechSynthesis.speak(utterance);
   };
 
-  const handleWordClick = (rawWord: string) => {
-    const cleaned = cleanWord(rawWord);
-    if (!cleaned) return;
-    setSelectedWord(cleaned);
-  };
-
-  const handleSaveWord = (word: string) => {
-    if (savedWords.includes(word)) {
-      setSavedWords((prev) => prev.filter((w) => w !== word));
-    } else {
-      setSavedWords((prev) => [...prev, word]);
-    }
-  };
+  // בדיקת תרגום מוגנת לחלוטין משגיאות undefined
+  const currentTranslation = (chapter?.vocabulary || []).find(
+    (item) => cleanWord(item.word) === selectedWord
+  )?.translation;
 
   return (
-    <main className="min-h-screen bg-[#090D16] text-slate-100 flex flex-col items-center py-10 px-4 md:px-8 selection:bg-indigo-500/30">
-      <div className="w-full max-w-2xl space-y-6">
+    <main className="min-h-screen bg-[#07090E] text-slate-100 py-10 px-4 md:px-8 selection:bg-indigo-500/30">
+      <div className="w-full max-w-3xl mx-auto space-y-6">
 
-        {/* Header אלגנטי */}
-        <header className="flex items-center justify-between bg-slate-900/60 backdrop-blur-md border border-slate-800/80 px-6 py-4 rounded-2xl shadow-sm">
+        {/* Header */}
+        <header className="flex items-center justify-between bg-slate-900/50 backdrop-blur-md border border-slate-800/80 px-6 py-4 rounded-2xl shadow-sm">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center font-bold text-white shadow-md shadow-indigo-500/20">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center font-bold text-white shadow-md shadow-indigo-500/20">
               <BookOpen className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="font-bold text-base tracking-tight leading-none text-white">LinguaPulse</h1>
-              <span className="text-xs text-slate-400">אימון אנגלית אינטראקטיבי</span>
+              <h1 className="font-bold text-lg text-white">LinguaPulse</h1>
+              <span className="text-xs text-slate-400">ספריית סיפורים בהמשכים</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs bg-slate-800/80 border border-slate-700/60 px-3 py-1.5 rounded-full text-slate-300 font-medium">
-              מילים שנשמרו: <strong className="text-indigo-400 font-semibold">{savedWords.length}</strong>
-            </span>
+          <div className="text-xs bg-slate-800/80 border border-slate-700/60 px-3.5 py-1.5 rounded-full text-slate-300 font-medium">
+            מילים שנשמרו: <strong className="text-indigo-400">{savedWords.length}</strong>
           </div>
         </header>
 
-        {/* כרטיסיית הסיפור המרכזית */}
-        <div className="bg-slate-900/40 backdrop-blur-md border border-slate-800/90 rounded-3xl p-6 md:p-8 shadow-2xl relative">
-          
-          {/* כותרת הסיפור ופקדי שמע */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800/60">
-            <div>
-              <span className="inline-block text-[11px] font-semibold tracking-wider uppercase text-indigo-300 bg-indigo-950/70 border border-indigo-800/50 px-3 py-1 rounded-full mb-2">
-                {SAMPLE_STORY.level}
-              </span>
-              <h2 className="text-2xl font-bold text-white tracking-tight">{SAMPLE_STORY.title}</h2>
-            </div>
-
-            {/* כפתורי שליטה */}
-            <div className="flex items-center gap-2">
+        {/* בחירת ז'אנר */}
+        <div className="bg-slate-900/30 border border-slate-800/80 rounded-2xl p-4">
+          <span className="text-xs font-semibold text-slate-400 block mb-3 text-right" dir="rtl">
+            בחרי ז'אנר כדי להתחיל ספר חדש:
+          </span>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            {GENRES.map((g) => (
               <button
-                onClick={() => setPlaybackRate((prev) => (prev === 0.85 ? 1 : 0.85))}
-                className="text-xs font-semibold px-2.5 py-2 rounded-xl bg-slate-800/70 border border-slate-700/60 hover:bg-slate-700 text-slate-300 transition"
-                title="מהירות הקראה"
+                key={g.id}
+                onClick={() => handleStartBook(g.id)}
+                disabled={isLoading}
+                className={`flex flex-col items-center justify-center p-3 rounded-xl border text-sm font-medium transition active:scale-95 ${
+                  selectedGenre === g.id && chapter
+                    ? "bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20"
+                    : "bg-slate-800/50 border-slate-700/60 text-slate-300 hover:bg-slate-800"
+                }`}
               >
-                {playbackRate}x
+                <span className="text-xl mb-1">{g.icon}</span>
+                <span>{g.label}</span>
               </button>
-
-              {isPlaying && (
-                <button
-                  onClick={handleResetAudio}
-                  className="p-2 rounded-xl bg-slate-800/70 border border-slate-700/60 hover:bg-slate-700 text-slate-300 transition"
-                  title="אפס שמע"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                </button>
-              )}
-
-              <button
-                onClick={handleTogglePlay}
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-semibold text-sm transition-all shadow-lg shadow-indigo-600/25"
-              >
-                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
-                <span>{isPlaying ? "השהה" : "האזן לסיפור"}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* תוכן הסיפור - עם סימון מילה מוקראת ומילים לחיצות */}
-          <div className="pt-6 text-xl md:text-2xl leading-[2.2] tracking-wide text-slate-300 flex flex-wrap gap-x-2 gap-y-1">
-            {words.map((word, idx) => {
-              const cleaned = cleanWord(word);
-              const isSpoken = currentWordIndex === idx && isPlaying;
-              const isSelected = selectedWord === cleaned;
-              const isSaved = savedWords.includes(cleaned);
-
-              return (
-                <span
-                  key={idx}
-                  onClick={() => handleWordClick(word)}
-                  className={`cursor-pointer rounded-lg px-1.5 py-0.5 transition-all duration-150 select-none ${
-                    isSpoken
-                      ? "bg-amber-400 text-slate-950 font-bold scale-105 shadow-md shadow-amber-400/20"
-                      : isSelected
-                      ? "bg-indigo-600 text-white font-semibold"
-                      : isSaved
-                      ? "text-indigo-300 border-b-2 border-indigo-400 font-medium"
-                      : "hover:bg-slate-800/80 hover:text-white"
-                  }`}
-                >
-                  {word}
-                </span>
-              );
-            })}
-          </div>
-
-          <div className="mt-6 pt-4 border-t border-slate-800/40 flex items-center justify-between text-xs text-slate-500">
-            <span>טיפ: לחצי על כל מילה כדי לראות תרגום ולשמור אותה</span>
-            {isPlaying && (
-              <span className="flex items-center gap-1.5 text-amber-400 font-medium animate-pulse">
-                <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                מקריא כעת...
-              </span>
-            )}
+            ))}
           </div>
         </div>
 
-        {/* חלונית תרגום תחתונה מעוצבת */}
+        {/* הודעת שגיאה במקרה של בעיה */}
+        {errorMessage && (
+          <div className="bg-rose-950/60 border border-rose-500/40 rounded-2xl p-4 flex items-center gap-3 text-rose-300 text-sm">
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
+        {/* מצב טעינה */}
+        {isLoading && (
+          <div className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-12 text-center flex flex-col items-center justify-center gap-3">
+            <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
+            <h3 className="text-lg font-semibold text-white">ה-AI כותב את הפרק עבורך...</h3>
+            <p className="text-xs text-slate-400">יוצר עלילה, מתאים שפה ומחלץ מילים לתרגול</p>
+          </div>
+        )}
+
+        {/* תוכן הפרק */}
+        {!isLoading && chapter && (
+          <div className="bg-slate-900/40 backdrop-blur-md border border-slate-800/90 rounded-3xl p-6 md:p-8 shadow-2xl space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800/60">
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider bg-indigo-950/70 text-indigo-300 border border-indigo-800/50 px-3 py-0.5 rounded-full inline-block mb-2">
+                  {chapter.genre} · פרק {chapter.chapterNumber}
+                </span>
+                <h2 className="text-2xl md:text-3xl font-bold text-white tracking-tight">{chapter.title}</h2>
+              </div>
+
+              <button
+                onClick={handleTogglePlay}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-semibold text-sm transition shadow-lg shadow-indigo-600/25"
+              >
+                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-white" />}
+                <span>{isPlaying ? "השהה" : "האזן לפרק"}</span>
+              </button>
+            </div>
+
+            <div className="text-lg md:text-xl leading-[2.1] text-slate-300 flex flex-wrap gap-x-2 gap-y-1">
+              {chapter.content.split(" ").map((word, idx) => {
+                const cleaned = cleanWord(word);
+                const isSelected = selectedWord === cleaned;
+                const isVocabulary = (chapter.vocabulary || []).some((v) => cleanWord(v.word) === cleaned);
+
+                return (
+                  <span
+                    key={idx}
+                    onClick={() => cleaned && setSelectedWord(cleaned)}
+                    className={`cursor-pointer rounded-md px-1 py-0.5 transition-all select-none ${
+                      isSelected
+                        ? "bg-indigo-600 text-white font-semibold"
+                        : isVocabulary
+                        ? "border-b border-amber-400 text-slate-100 hover:bg-slate-800/80"
+                        : "hover:bg-slate-800/60"
+                    }`}
+                  >
+                    {word}
+                  </span>
+                );
+              })}
+            </div>
+
+            {chapter.cliffhanger && (
+              <div className="bg-slate-950/60 border border-amber-500/20 rounded-2xl p-4 text-amber-200/90 text-sm">
+                <strong>סיום מותח:</strong> {chapter.cliffhanger}
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={handleNextChapter}
+                className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold px-6 py-3 rounded-xl shadow-lg shadow-indigo-600/25 transition active:scale-95"
+              >
+                <span>המשך לפרק {chapter.chapterNumber + 1}</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* חלונית תרגום */}
         {selectedWord && (
-          <div className="bg-slate-900/90 border border-indigo-500/30 backdrop-blur-xl rounded-2xl p-5 shadow-2xl animate-in fade-in slide-in-from-bottom-3 duration-200">
+          <div className="bg-slate-900/95 border border-indigo-500/30 backdrop-blur-xl rounded-2xl p-5 shadow-2xl">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3">
                 <h3 className="text-2xl font-bold text-white capitalize">{selectedWord}</h3>
                 <button
                   onClick={() => speakWord(selectedWord)}
                   className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-400 transition"
-                  title="השמע מילה זו"
+                  title="השמע מילה"
                 >
                   <Volume2 className="w-5 h-5" />
                 </button>
               </div>
 
               <button
-                onClick={() => handleSaveWord(selectedWord)}
-                className={`flex items-center gap-2 text-xs font-semibold px-3.5 py-2 rounded-xl transition ${
-                  savedWords.includes(selectedWord)
-                    ? "bg-emerald-950/70 border border-emerald-500/40 text-emerald-400"
-                    : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20"
-                }`}
+                onClick={() => {
+                  if (!savedWords.includes(selectedWord)) {
+                    setSavedWords((prev) => [...prev, selectedWord]);
+                  }
+                }}
+                className="text-xs font-semibold px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition"
               >
-                {savedWords.includes(selectedWord) ? (
-                  <>
-                    <Check className="w-3.5 h-3.5" />
-                    <span>נשמר ברשימה</span>
-                  </>
-                ) : (
-                  <>
-                    <Bookmark className="w-3.5 h-3.5" />
-                    <span>שמור מילה לתרגול</span>
-                  </>
-                )}
+                {savedWords.includes(selectedWord) ? "נשמר ברשימה" : "שמור מילה"}
               </button>
             </div>
 
-            <div className="bg-slate-950/50 rounded-xl p-3.5 border border-slate-800/80 text-right" dir="rtl">
+            <div className="bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 text-right" dir="rtl">
               <span className="text-xs text-slate-400 block mb-0.5">תרגום לעברית:</span>
               <span className="text-lg font-bold text-indigo-300">
-                {DICTIONARY[selectedWord] || "לחץ לתרגום מלא"}
+                {currentTranslation || "מילה ללא תרגום מוגדר מראש"}
               </span>
             </div>
+          </div>
+        )}
+
+        {/* מסך פתיחה */}
+        {!chapter && !isLoading && !errorMessage && (
+          <div className="text-center py-12 text-slate-400 bg-slate-900/20 border border-slate-800/40 rounded-3xl">
+            <Library className="w-12 h-12 mx-auto mb-3 text-slate-600" />
+            <p className="text-base font-medium text-slate-300">בחרי אחד מהז'אנרים למעלה כדי להתחיל לקרוא את הפרק הראשון</p>
           </div>
         )}
 
